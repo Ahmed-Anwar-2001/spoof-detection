@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: upokari/Dockerfile
+    container_name: upokari_web
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./upokari:/app  # Mount the Django project directory
+      - ./upokari/db.sqlite3:/app/db.sqlite3  # SQLite database
+    ports:
+      - "8000:8000"
+    environment:
+      SECRET_KEY: "django-insecure-%1dgmp-xss_a+d!6(3ww)fn&&44-hq^p+p#cygh2=-4iwj8hk("
+      DEBUG: "True"
+      ROOT_URLCONF: "upokari.urls"
+      WSGI_APPLICATION: "upokari.wsgi.application"
+      LANGUAGE_CODE: "en-us"
+      TIME_ZONE: "UTC"
+      USE_I18N: "True"
+      USE_TZ: "True"
+      ENGINE: "django.db.backends.sqlite3"
+      NAME: "db.sqlite3"
