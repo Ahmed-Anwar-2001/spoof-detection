@@ -1,25 +1,41 @@
-# Use the official Python image
-FROM python:3.10-slim
+# Stage 1: Build dlib
+FROM python:3.10-slim AS build-stage
 
-# Set the working directory in the container
 WORKDIR /app
 
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    g++ \
+    make \
+    libboost-python-dev \
+    libboost-system-dev \
+    && rm -rf /var/lib/apt/lists/*
 
+# Install dlib
+RUN pip install dlib
 
-# Copy the requirements file from the upokari folder
-COPY upokari/requirements.txt /app/
+# Stage 2: Final image
+FROM python:3.10-slim
 
-# Copy the libs folder to the container
-COPY upokari/libs /app/libs
+WORKDIR /app
 
-# Install Python dependencies, including dlib
-RUN pip install --no-cache-dir -r requirements.txt
+# Install runtime dependencies (including libGL)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy the Django project into the container
+# Copy dlib from build stage
+COPY --from=build-stage /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+
+# Copy the rest of the application
 COPY upokari /app/
 
-# Expose the port that Django runs on
-EXPOSE 8000
+# Install other Python dependencies
+COPY upokari/requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Default command to run the Django development server
+# Expose the port and run the app
+EXPOSE 8000
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
