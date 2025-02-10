@@ -12,6 +12,13 @@ from .anti_spoof_predict import AntiSpoofPredict
 from .generate_patches import CropImage
 from .utility import parse_model_name
 
+import requests
+import io
+from PIL import Image
+from .models import SpoofAttempt
+from dotenv import load_dotenv
+load_dotenv()
+
 class AntiSpoofingAndFacialRecognitionView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
@@ -106,3 +113,126 @@ class AntiSpoofingAndFacialRecognitionView(APIView):
         aspect_ratio = width / height
         target_ratio = 3 / 4
         return abs(aspect_ratio - target_ratio) <= tolerance
+
+
+
+
+
+SDK_URL = os.environ.get("SDK_URL")
+
+
+from django.core.files.base import ContentFile
+
+
+class IDDocumentLivenessView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_client_ip(self, request):
+        """Extract real IP address, ignoring local/private addresses"""
+        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+        if x_forwarded_for:
+            ip_list = x_forwarded_for.split(",")
+            for ip in ip_list:
+                ip = ip.strip()
+                if not ip.startswith(("10.", "192.168.", "172.", "127.")):  # Ignore private/local IPs
+                    return ip
+        return request.META.get("REMOTE_ADDR", "Unknown")
+
+    def get_location_from_ip(self, ip):
+        """Fetch location details using IP lookup (Ignore local IPs)"""
+        if ip.startswith(("127.", "10.", "192.168.", "172.")):  # Local network, no location
+            return "Local Network"
+
+        try:
+            response = requests.get(f"http://ip-api.com/json/{ip}")
+            if response.status_code == 200:
+                data = response.json()
+                return f"{data.get('city')}, {data.get('country')}"
+        except Exception:
+            return "Unknown Location"
+
+    def post(self, request, *args, **kwargs):
+        try:
+            user_id = request.data.get("user_id")
+            image_file = request.FILES.get("image")
+
+            if not user_id or not image_file:
+                return Response({"error": "User ID and image are required."}, status=400)
+
+            # Convert image file to bytes
+            image = Image.open(image_file)
+            img_bytes = io.BytesIO()
+            image.save(img_bytes, format="JPEG")
+            img_bytes.seek(0)
+
+            # Send request to SDK
+            files = {"image": img_bytes}
+            sdk_response = requests.post(SDK_URL, files=files)
+
+            if not sdk_response.ok:
+                return Response({"error": "Failed to process image with SDK"}, status=500)
+
+            sdk_result = sdk_response.json()
+            process_results = sdk_result.get("result", {})
+
+            screenReply = process_results.get("screenReply", 1.0)
+            portraitReplace = process_results.get("portraitReplace", 1.0)
+
+            # Get client IP & location
+            client_ip = self.get_client_ip(request)
+            location = self.get_location_from_ip(client_ip)
+
+            # Check if spoof detected
+            is_spoof = screenReply < 0.5 or portraitReplace < 0.5
+
+            if is_spoof:
+                # Save image as proof
+                spoof_instance = SpoofAttempt(user_id=user_id, ip_address=client_ip, location=location)
+                spoof_instance.image.save(f"{user_id}_spoof.jpg", ContentFile(img_bytes.getvalue()))
+                spoof_instance.save()
+
+                return Response({
+                    "result": "Spoof detected",
+                    "user_id": user_id,
+                    "screenReply": screenReply,
+                    "portraitReplace": portraitReplace,
+                    "ip_address": client_ip,
+                    "location": location,
+                    "image_url": request.build_absolute_uri(spoof_instance.image.url),
+                }, status=200)
+
+            return Response({
+                "result": "Real document",
+                "sdk_response": sdk_result
+            }, status=200)
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+
+
+from rest_framework.generics import ListAPIView
+from django.utils.dateparse import parse_datetime
+from .serializers import SpoofAttemptSerializer
+
+class QuerySpoofAttemptsView(ListAPIView):
+    serializer_class = SpoofAttemptSerializer
+
+    def get_queryset(self):
+        queryset = SpoofAttempt.objects.all()
+        user_id = self.request.query_params.get("user_id")
+        start_date = self.request.query_params.get("start_date")
+        end_date = self.request.query_params.get("end_date")
+        ip_address = self.request.query_params.get("ip")
+
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        if start_date:
+            queryset = queryset.filter(detected_at__gte=parse_datetime(start_date))
+        if end_date:
+            queryset = queryset.filter(detected_at__lte=parse_datetime(end_date))
+        if ip_address:
+            queryset = queryset.filter(ip_address=ip_address)
+
+        return queryset
