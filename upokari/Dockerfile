@@ -1,5 +1,5 @@
 # Stage 1: Build dlib
-FROM python:3.10-slim AS build-stage
+FROM python:3.11-slim AS build-stage
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install dlib
 
 # Stage 2: Final image
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -27,15 +27,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dlib from build stage
-COPY --from=build-stage /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=build-stage /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
 # Copy the rest of the application
 COPY upokari /app/
 
-# Install other Python dependencies
+# Copy .env for environment variables
+COPY .env /app/.env
+
+# Install Python dependencies
 COPY upokari/requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Expose the port and run the app
-EXPOSE 8000
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+EXPOSE 6000
+CMD ["python", "manage.py", "runserver", "0.0.0.0:6000"]
